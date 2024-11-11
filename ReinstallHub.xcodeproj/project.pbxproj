@@ -6,7 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AF3434A82CE2BC1100DB7E86 /* info.plist in Resources */ = {isa = PBXBuildFile; fileRef = AF3434A72CE2BC1100DB7E86 /* info.plist */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		AF3434A72CE2BC1100DB7E86 /* info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = info.plist; sourceTree = "<group>"; };
 		AF52F31C2CE2A7700082FD0B /* ReinstallHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ReinstallHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -32,6 +37,7 @@
 		AF52F3132CE2A7700082FD0B = {
 			isa = PBXGroup;
 			children = (
+				AF3434A72CE2BC1100DB7E86 /* info.plist */,
 				AF52F31E2CE2A7700082FD0B /* ReinstallHub */,
 				AF52F31D2CE2A7700082FD0B /* Products */,
 			);
@@ -109,6 +115,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AF3434A82CE2BC1100DB7E86 /* info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

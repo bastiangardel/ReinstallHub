@@ -7,7 +7,7 @@
 
 import SwiftUI
 import Foundation
-import Security
+import AuthenticationServices
 
 import Foundation
 
@@ -17,181 +17,291 @@ struct Device: Identifiable, Hashable, Decodable {
     let udid: String // UDID pour l'API, utilisé pour la réinstallation du Hub
 }
 
+
 class APIManager {
-    let baseURL = "https://as.awmdm.com/api"
 
-    private var credentials: String? {
-        KeychainHelper.shared.retrieveValue(forKey: "credentials")
-    }
+    private let baseURL = "https://as.awmdm.com/api/mam/apps/internal/284/install"
 
-    private var apiKey: String? {
-        KeychainHelper.shared.retrieveValue(forKey: "apiKey")
-    }
-
-    // Récupère les appareils avec le tag "Missing Hub"
+    // Fonction pour récupérer les appareils avec le tag "Missing Hub"
     func fetchDevicesWithTag(completion: @escaping ([Device]?) -> Void) {
-        guard let credentials = credentials, let apiKey = apiKey else {
-            print("Erreur : les identifiants ne sont pas présents dans le Keychain")
+        // Récupérer les identifiants depuis le Keychain
+        if let credentials = KeychainHelper.shared.retrievePassword(for: "WorkspaceOneCredentials") {
+            let loginPassword = credentials.username
+            let apiKey = credentials.password
+
+            // Effectuer la requête API avec les identifiants récupérés
+            fetchDevices(loginPassword: loginPassword, apiKey: apiKey, completion: completion)
+        } else {
+            completion(nil)
+        }
+    }
+
+    private func fetchDevices(loginPassword: String, apiKey: String, completion: @escaping ([Device]?) -> Void) {
+        guard let url = URL(string: baseURL) else {
+            print("URL invalide")
             completion(nil)
             return
         }
 
-        let url = URL(string: "\(baseURL)/mdm/devices/search?tag=Missing Hub&organizationgroupcode=SSC")!
         var request = URLRequest(url: url)
-        request.addValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
-        request.addValue(apiKey, forHTTPHeaderField: "aw-tenant-code")
+        request.httpMethod = "GET"
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            guard let data = data, error == nil else {
-                print("Erreur: \(error?.localizedDescription ?? "Pas de description")")
+        // Préparer l'en-tête d'authentification Basic (Base64)
+        let authString = "Basic \(loginPassword)"
+        request.setValue(authString, forHTTPHeaderField: "Authorization")
+        request.setValue(apiKey, forHTTPHeaderField: "aw-tenant-code")
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("Erreur lors de la récupération des appareils: \(error)")
                 completion(nil)
                 return
             }
-            
-            let devices = try? JSONDecoder().decode([Device].self, from: data)
-            completion(devices)
-        }.resume()
+
+            guard let data = data else {
+                print("Données manquantes")
+                completion(nil)
+                return
+            }
+
+            // Analyser la réponse en JSON
+            do {
+                let devices = try JSONDecoder().decode([Device].self, from: data)
+                completion(devices)
+            } catch {
+                print("Erreur lors de la décodification des données: \(error)")
+                completion(nil)
+            }
+        }
+
+        task.resume()
     }
 
-    // Lancer la réinstallation du Hub sur un appareil via son UDID
     func installHub(on udid: String) {
-        guard let credentials = credentials, let apiKey = apiKey else {
-            print("Erreur : les identifiants ne sont pas présents dans le Keychain")
+        if let credentials = KeychainHelper.shared.retrievePassword(for: "WorkspaceOneCredentials") {
+            let loginPassword = credentials.username
+            let apiKey = credentials.password
+
+            reinstallHub(udid: udid, loginPassword: loginPassword, apiKey: apiKey)
+        }
+    }
+
+    private func reinstallHub(udid: String, loginPassword: String, apiKey: String) {
+        guard let url = URL(string: baseURL) else {
+            print("URL invalide")
             return
         }
 
-        let url = URL(string: "\(baseURL)/mam/apps/internal/284/install")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.addValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
-        request.addValue(apiKey, forHTTPHeaderField: "aw-tenant-code")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let body: [String: String] = ["Udid": udid] // Utilisation du UDID pour la réinstallation
+
+        // Préparer le corps de la requête
+        let body: [String: Any] = ["Udid": udid]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: [])
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        // Ajouter les en-têtes d'authentification
+        let authString = "Basic \(loginPassword)"
+        request.setValue(authString, forHTTPHeaderField: "Authorization")
+        request.setValue(apiKey, forHTTPHeaderField: "aw-tenant-code")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
-                print("Erreur lors de la réinstallation du Hub : \(error)")
-            } else {
-                print("Réinstallation du Hub lancée sur \(udid)")
+                print("Erreur lors de la réinstallation du Hub: \(error)")
+                return
             }
-        }.resume()
+
+            if let data = data {
+                print("Réponse reçue : \(String(data: data, encoding: .utf8) ?? "Aucune donnée")")
+            }
+        }
+
+        task.resume()
     }
 }
 
 struct DeviceListView: View {
-    @State private var showCredentialsInput = false
-    @State private var devices: [Device] = [] // Liste des appareils
-    @State private var selectedDevices: Set<Device> = [] // Appareils sélectionnés
+       @State private var isAuthenticated = false
+       @State private var login = ""
+       @State private var password = ""
+       @State private var apiKey = ""
+       @State private var devices: [Device] = []
+       @State private var isLoading = false
+       @State private var showLoginPopup = false
+       @State private var selectedDevices = Set<String>()
+       
+       // Vérification de l'authentification à l'ouverture de l'app
+       init() {
+           if KeychainHelper.shared.retrievePassword(for: "WorkspaceOneCredentials") != nil {
+               self._isAuthenticated.wrappedValue = true
+           } else {
+               self._showLoginPopup.wrappedValue = true
+           }
+       }
 
-    var body: some View {
-        VStack {
-            List(devices, selection: $selectedDevices) { device in
-                Text(device.name) // Affichage du nom de l'appareil
-            }
-            .frame(minWidth: 400, minHeight: 300)
+       var body: some View {
+           VStack {
+               if isAuthenticated {
+                   // Liste des appareils récupérés via l'API
+                   List(devices, id: \.udid, selection: $selectedDevices) { device in
+                       Text(device.name)
+                           .padding()
+                           .background(selectedDevices.contains(device.udid) ? Color.blue : Color.clear)
+                           .cornerRadius(5)
+                           .foregroundColor(.black)
+                   }
+                   
+                   // Bouton pour réinstaller le Hub sur les appareils sélectionnés
+                   Button("Réinstaller le Hub") {
+                       reinstallHubOnSelectedDevices()
+                   }
+                   .disabled(selectedDevices.isEmpty)
+                   .padding()
+                   .background(selectedDevices.isEmpty ? Color.gray : Color.blue)
+                   .foregroundColor(.white)
+                   .cornerRadius(10)
+                   
+                   // Indicateur de chargement
+                   if isLoading {
+                       ProgressView()
+                           .progressViewStyle(CircularProgressViewStyle())
+                           .padding()
+                   }
+               } else {
+                   // Affichage du bouton pour afficher le popup de connexion
+                   Button("Se connecter") {
+                       self.showLoginPopup.toggle()
+                   }
+                   .padding()
+                   .background(Color.blue)
+                   .foregroundColor(.white)
+                   .cornerRadius(10)
+                   .sheet(isPresented: $showLoginPopup) {
+                       LoginPopupView(login: $login, password: $password, apiKey: $apiKey, isAuthenticated: $isAuthenticated)
+                   }
+               }
+           }
+           .onAppear {
+               if isAuthenticated {
+                   loadDevices()
+               }
+           }
+       }
 
-            Button("Réinstaller le Hub") {
-                reinstallHubOnSelectedDevices()
-            }
-            .disabled(selectedDevices.isEmpty) // Désactive le bouton si aucun appareil n'est sélectionné
-        }
-        .onAppear {
-            checkCredentials()
-            fetchDevices()
-        }
-        .sheet(isPresented: $showCredentialsInput) {
-            CredentialsInputView(isPresented: $showCredentialsInput) { encodedCredentials, apiKey in
-                KeychainHelper.shared.save(value: encodedCredentials, forKey: "credentials")
-                KeychainHelper.shared.save(value: apiKey, forKey: "apiKey")
-            }
-        }
-    }
+       // Fonction pour charger les appareils
+       private func loadDevices() {
+           guard !login.isEmpty, !password.isEmpty, !apiKey.isEmpty else { return }
+           isLoading = true
+           let loginPassword = "\(login):\(password)"
+           
+           let apiManager = APIManager()
+           apiManager.fetchDevicesWithTag { devices in
+               DispatchQueue.main.async {
+                   self.devices = devices ?? []
+                   self.isLoading = false
+               }
+           }
+       }
 
-    private func checkCredentials() {
-        let credentials = KeychainHelper.shared.retrieveValue(forKey: "credentials")
-        let apiKey = KeychainHelper.shared.retrieveValue(forKey: "apiKey")
-        
-        if credentials == nil || apiKey == nil {
-            showCredentialsInput = true
-        }
-    }
+       // Fonction pour réinstaller le Hub sur les appareils sélectionnés
+       private func reinstallHubOnSelectedDevices() {
+           guard !selectedDevices.isEmpty else { return }
+           
+           let apiManager = APIManager()
+           for udid in selectedDevices {
+               apiManager.installHub(on: udid)
+           }
+       }
+   }
 
-    private func fetchDevices() {
-        APIManager().fetchDevicesWithTag { devices in
-            DispatchQueue.main.async {
-                self.devices = devices ?? []
-            }
-        }
-    }
 
-    private func reinstallHubOnSelectedDevices() {
-        for device in selectedDevices {
-            APIManager().installHub(on: device.udid) // Utilisation du UDID pour la réinstallation
-        }
-    }
-}
+   struct LoginPopupView: View {
+       @Binding var login: String
+       @Binding var password: String
+       @Binding var apiKey: String
+       @Binding var isAuthenticated: Bool
+       
+       var body: some View {
+           VStack {
+               Text("S'authentifier")
+                   .font(.headline)
+                   .padding()
 
-struct CredentialsInputView: View {
-    @Binding var isPresented: Bool
-    var onSave: (String, String) -> Void
+               TextField("Login", text: $login)
+                   .padding()
+                   .textFieldStyle(RoundedBorderTextFieldStyle())
 
-    @State private var login: String = ""
-    @State private var password: String = ""
-    @State private var apiKey: String = ""
+               SecureField("Password", text: $password)
+                   .padding()
+                   .textFieldStyle(RoundedBorderTextFieldStyle())
 
-    var body: some View {
-        VStack {
-            TextField("Login", text: $login)
-                .padding()
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-            
-            SecureField("Password", text: $password)
-                .padding()
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-            
-            TextField("API Key", text: $apiKey)
-                .padding()
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-            
-            Button("Save") {
-                saveCredentials()
-            }
-            .padding()
-        }
-        .padding()
-    }
+               TextField("API Key", text: $apiKey)
+                   .padding()
+                   .textFieldStyle(RoundedBorderTextFieldStyle())
 
-    private func saveCredentials() {
-        let loginPassword = "\(login):\(password)"
-        if let encodedCredentials = loginPassword.data(using: .utf8)?.base64EncodedString() {
-            onSave(encodedCredentials, apiKey)
-            isPresented = false
-        }
-    }
-}
+               Button("Se connecter") {
+                   if saveCredentials() {
+                       self.isAuthenticated = true
+                   }
+               }
+               .padding()
+               .background(Color.blue)
+               .foregroundColor(.white)
+               .cornerRadius(10)
+           }
+           .padding()
+       }
+
+       // Sauvegarde des informations dans le Keychain
+       private func saveCredentials() -> Bool {
+           guard !login.isEmpty, !password.isEmpty, !apiKey.isEmpty else {
+               return false
+           }
+           
+           return KeychainHelper.shared.savePassword(username: login, password: password, accountName: "WorkspaceOneCredentials")
+       }
+   }
+
+   struct ContentView_Previews: PreviewProvider {
+       static var previews: some View {
+           ContentView()
+       }
+   }
 
 class KeychainHelper {
+
     static let shared = KeychainHelper()
+
+    // Clé pour identifier les données dans le Keychain
+    private let service = "ch.epfl.ReinstallHub"
     
-    func save(value: String, forKey key: String) {
-        guard let data = value.data(using: .utf8) else { return }
+    // Fonction pour stocker un mot de passe dans le Keychain
+    func savePassword(username: String, password: String, accountName: String) -> Bool {
+        let loginPassword = "\(username):\(password)"
+        let passwordData = loginPassword.data(using: .utf8)!
         
-        delete(forKey: key) // Supprimez toute valeur précédente
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: accountName,
+            kSecValueData as String: passwordData
         ]
         
-        SecItemAdd(query as CFDictionary, nil)
+        // Effacer l'ancien mot de passe si il existe déjà
+        SecItemDelete(query as CFDictionary)
+        
+        // Ajouter ou mettre à jour le mot de passe
+        let status = SecItemAdd(query as CFDictionary, nil)
+        
+        return status == errSecSuccess
     }
-    
-    func retrieveValue(forKey key: String) -> String? {
+
+    // Fonction pour récupérer un mot de passe à partir du Keychain
+    func retrievePassword(for accountName: String) -> (username: String, password: String)? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: accountName,
             kSecReturnData as String: kCFBooleanTrue!,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -199,17 +309,27 @@ class KeychainHelper {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        if status == errSecSuccess, let data = result as? Data,
+           let loginPassword = String(data: data, encoding: .utf8)?.split(separator: ":") {
+            let username = String(loginPassword[0])
+            let password = String(loginPassword[1])
+            return (username, password)
+        } else {
+            print("Erreur lors de la récupération du mot de passe ou compte non trouvé.")
+            return nil
+        }
     }
-    
-    func delete(forKey key: String) {
+
+    // Fonction pour supprimer un mot de passe du Keychain
+    func deletePassword(for accountName: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: key
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: accountName
         ]
         
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess
     }
 }
 
