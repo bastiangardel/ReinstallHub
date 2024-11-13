@@ -5,342 +5,364 @@
 //  Created by Bastian Gardel on 11.11.2024.
 //
 
+import Foundation
+import CoreData
+import KeychainAccess
+import LocalAuthentication
 import SwiftUI
-import Foundation
-import AuthenticationServices
 
-import Foundation
-
-struct Device: Identifiable, Hashable, Decodable {
-    let id: UUID // Identifiant unique de l'appareil
-    let name: String
-    let udid: String // UDID pour l'API, utilisé pour la réinstallation du Hub
+struct DeviceResponse: Decodable {
+    let device: [Device]
+    
+    enum CodingKeys: String, CodingKey {
+        case device = "Device"
+    }
 }
 
-
-class APIManager {
-
-    private let baseURL = "https://as.awmdm.com/api/mam/apps/internal/284/install"
-
-    // Fonction pour récupérer les appareils avec le tag "Missing Hub"
-    func fetchDevicesWithTag(completion: @escaping ([Device]?) -> Void) {
-        // Récupérer les identifiants depuis le Keychain
-        if let credentials = KeychainHelper.shared.retrievePassword(for: "WorkspaceOneCredentials") {
-            let loginPassword = credentials.username
-            let apiKey = credentials.password
-
-            // Effectuer la requête API avec les identifiants récupérés
-            fetchDevices(loginPassword: loginPassword, apiKey: apiKey, completion: completion)
-        } else {
-            completion(nil)
-        }
+struct Device: Identifiable, Decodable, Hashable, Equatable {
+    // Utilisez 'id' comme identifiant unique
+    let id: Int  // Cette valeur provient de "DeviceId" dans le JSON
+    let friendlyName: String
+    let dateTagged: String
+    let deviceUuid: String
+    
+    enum CodingKeys: String, CodingKey {
+        case id = "DeviceId"         // Mappage de "DeviceId" du JSON vers "id" dans le modèle
+        case friendlyName = "FriendlyName"
+        case dateTagged = "DateTagged"
+        case deviceUuid = "DeviceUuid"
     }
+}
 
-    private func fetchDevices(loginPassword: String, apiKey: String, completion: @escaping ([Device]?) -> Void) {
-        guard let url = URL(string: baseURL) else {
-            print("URL invalide")
-            completion(nil)
+enum AppError: Error {
+    case configurationMissing
+    case invalidResponse
+}
+
+enum KeychainKeys: String {
+    case apiUsername = "WorkspaceOneAPIUsername"
+    case apiPassword = "WorkspaceOneAPIPassword"
+    case apiKey = "WorkspaceOneAPIKey"
+}
+
+let keychain = Keychain(service: "ch.epfl.reinstallhub")
+
+func saveCredentials(username: String, password: String, apiKey: String) {
+    keychain[KeychainKeys.apiUsername.rawValue] = username
+    keychain[KeychainKeys.apiPassword.rawValue] = password
+    keychain[KeychainKeys.apiKey.rawValue] = apiKey
+}
+
+func getCredentials() -> (username: String, password: String, apiKey: String)? {
+    guard let username = keychain[KeychainKeys.apiUsername.rawValue],
+          let password = keychain[KeychainKeys.apiPassword.rawValue],
+          let apiKey = keychain[KeychainKeys.apiKey.rawValue] else {
+        return nil
+    }
+    return (username, password, apiKey)
+}
+
+func saveToCoreData(url: String, appId: String, tagid: String) {
+    let context = PersistenceController.shared.container.viewContext
+    let config = AppConfig(context: context)
+    config.wsoUrl = url
+    config.appId = appId
+    config.tagid = tagid
+    
+    do {
+        try context.save()
+    } catch {
+        print("Erreur lors de la sauvegarde des données dans Core Data: \(error)")
+    }
+}
+
+func getAppConfig() -> AppConfig? {
+    let context = PersistenceController.shared.container.viewContext
+    let request: NSFetchRequest<AppConfig> = AppConfig.fetchRequest()
+    return try? context.fetch(request).first
+}
+
+struct ConfigurationView: View {
+    @Binding var isConfigured: Bool
+    @State private var wsoUrl: String = ""
+    @State private var appId: String = ""
+    @State private var tagId: String = ""
+    @State private var apiKey: String = ""
+    @State private var username: String = ""
+    @State private var password: String = ""
+    
+    var body: some View {
+        VStack {
+            TextField("URL du tenant WSO", text: $wsoUrl)
+            TextField("App ID", text: $appId)
+            TextField("Tag ID", text: $tagId)
+            SecureField("API Key", text: $apiKey)
+            TextField("API Username", text: $username)
+            SecureField("API Password", text: $password)
+            Button("Enregistrer") {
+                saveConfiguration()
+            }
+        }
+        .padding()
+    }
+    
+    func saveConfiguration() {
+        saveToCoreData(url: wsoUrl, appId: appId, tagid: tagId)
+        saveCredentials(username: username, password: password, apiKey: apiKey)
+        isConfigured = true
+    }
+}
+
+func fetchDevices(withTag tag: String, completion: @escaping (Result<[Device], Error>) -> Void) {
+    guard let config = getAppConfig(), let credentials = getCredentials() else {
+        completion(.failure(AppError.configurationMissing))
+        return
+    }
+    
+    let url = URL(string: "\(config.wsoUrl ?? "url missing")/api/mdm/tags/\(tag)/devices")!
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    request.setValue(credentials.apiKey, forHTTPHeaderField: "aw-tenant-code")
+    
+    let loginString = "\(credentials.username):\(credentials.password)"
+    let loginData = loginString.data(using: .utf8)
+    let base64LoginString = loginData?.base64EncodedString() ?? ""
+    request.setValue("Basic \(base64LoginString)", forHTTPHeaderField: "Authorization")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    
+    print(request)
+    
+    let task = URLSession.shared.dataTask(with: request) { data, response, error in
+        if let error = error {
+            completion(.failure(error))
             return
         }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
-        // Préparer l'en-tête d'authentification Basic (Base64)
-        let authString = "Basic \(loginPassword)"
-        request.setValue(authString, forHTTPHeaderField: "Authorization")
-        request.setValue(apiKey, forHTTPHeaderField: "aw-tenant-code")
-
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                print("Erreur lors de la récupération des appareils: \(error)")
-                completion(nil)
-                return
+        
+        // Imprimer la réponse brute
+        if let data = data {
+            if let rawResponse = String(data: data, encoding: .utf8) {
+                print("Réponse brute : \(rawResponse)")  // Affiche la réponse JSON brute dans la console
+                
+                // Optionnel : Si vous voulez aussi le décoder et travailler avec les données
+                do {
+                    let decoder = JSONDecoder()
+                    let decodedResponse = try decoder.decode(DeviceResponse.self, from: data)
+                    
+                    if decodedResponse.device.isEmpty {
+                        print("Aucun appareil trouvé.")
+                    } else {
+                        print("Appareils récupérés : \(decodedResponse.device)")
+                    }
+                    
+                    // Passez les appareils décodés à la fonction de completion
+                    completion(.success(decodedResponse.device))
+                    //completion(.success(dummyDevices))
+                } catch {
+                    print("Erreur de décodage : \(error.localizedDescription)")
+                    completion(.failure(error))
+                }
             }
-
-            guard let data = data else {
-                print("Données manquantes")
-                completion(nil)
-                return
-            }
-
-            // Analyser la réponse en JSON
-            do {
-                let devices = try JSONDecoder().decode([Device].self, from: data)
-                completion(devices)
-            } catch {
-                print("Erreur lors de la décodification des données: \(error)")
-                completion(nil)
-            }
-        }
-
-        task.resume()
-    }
-
-    func installHub(on udid: String) {
-        if let credentials = KeychainHelper.shared.retrievePassword(for: "WorkspaceOneCredentials") {
-            let loginPassword = credentials.username
-            let apiKey = credentials.password
-
-            reinstallHub(udid: udid, loginPassword: loginPassword, apiKey: apiKey)
         }
     }
+    task.resume()
+}
 
-    private func reinstallHub(udid: String, loginPassword: String, apiKey: String) {
-        guard let url = URL(string: baseURL) else {
-            print("URL invalide")
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-
-        // Préparer le corps de la requête
-        let body: [String: Any] = ["Udid": udid]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: [])
-
-        // Ajouter les en-têtes d'authentification
-        let authString = "Basic \(loginPassword)"
-        request.setValue(authString, forHTTPHeaderField: "Authorization")
-        request.setValue(apiKey, forHTTPHeaderField: "aw-tenant-code")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                print("Erreur lors de la réinstallation du Hub: \(error)")
-                return
-            }
-
-            if let data = data {
-                print("Réponse reçue : \(String(data: data, encoding: .utf8) ?? "Aucune donnée")")
-            }
-        }
-
-        task.resume()
+func clearStorage() {
+    // Effacer Core Data
+    let context = PersistenceController.shared.container.viewContext
+    let fetchRequest: NSFetchRequest<NSFetchRequestResult> = AppConfig.fetchRequest()
+    let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
+    
+    do {
+        try context.execute(deleteRequest)
+        try context.save()
+    } catch {
+        print("Erreur lors de la suppression des données dans Core Data: \(error)")
+    }
+    
+    // Effacer Keychain
+    do {
+        try keychain.removeAll()
+    } catch let error {
+        print("Erreur lors de la suppression des informations du Keychain: \(error)")
     }
 }
 
 struct DeviceListView: View {
-       @State private var isAuthenticated = false
-       @State private var login = ""
-       @State private var password = ""
-       @State private var apiKey = ""
-       @State private var devices: [Device] = []
-       @State private var isLoading = false
-       @State private var showLoginPopup = false
-       @State private var selectedDevices = Set<String>()
-       
-       // Vérification de l'authentification à l'ouverture de l'app
-       init() {
-           if KeychainHelper.shared.retrievePassword(for: "WorkspaceOneCredentials") != nil {
-               self._isAuthenticated.wrappedValue = true
-           } else {
-               self._showLoginPopup.wrappedValue = true
-           }
-       }
-
-       var body: some View {
-           VStack {
-               if isAuthenticated {
-                   // Liste des appareils récupérés via l'API
-                   List(devices, id: \.udid, selection: $selectedDevices) { device in
-                       Text(device.name)
-                           .padding()
-                           .background(selectedDevices.contains(device.udid) ? Color.blue : Color.clear)
-                           .cornerRadius(5)
-                           .foregroundColor(.black)
-                   }
-                   
-                   // Bouton pour réinstaller le Hub sur les appareils sélectionnés
-                   Button("Réinstaller le Hub") {
-                       reinstallHubOnSelectedDevices()
-                   }
-                   .disabled(selectedDevices.isEmpty)
-                   .padding()
-                   .background(selectedDevices.isEmpty ? Color.gray : Color.blue)
-                   .foregroundColor(.white)
-                   .cornerRadius(10)
-                   
-                   // Indicateur de chargement
-                   if isLoading {
-                       ProgressView()
-                           .progressViewStyle(CircularProgressViewStyle())
-                           .padding()
-                   }
-               } else {
-                   // Affichage du bouton pour afficher le popup de connexion
-                   Button("Se connecter") {
-                       self.showLoginPopup.toggle()
-                   }
-                   .padding()
-                   .background(Color.blue)
-                   .foregroundColor(.white)
-                   .cornerRadius(10)
-                   .sheet(isPresented: $showLoginPopup) {
-                       LoginPopupView(login: $login, password: $password, apiKey: $apiKey, isAuthenticated: $isAuthenticated)
-                   }
-               }
-           }
-           .onAppear {
-               if isAuthenticated {
-                   loadDevices()
-               }
-           }
-       }
-
-       // Fonction pour charger les appareils
-       private func loadDevices() {
-           guard !login.isEmpty, !password.isEmpty, !apiKey.isEmpty else { return }
-           isLoading = true
-           let loginPassword = "\(login):\(password)"
-           
-           let apiManager = APIManager()
-           apiManager.fetchDevicesWithTag { devices in
-               DispatchQueue.main.async {
-                   self.devices = devices ?? []
-                   self.isLoading = false
-               }
-           }
-       }
-
-       // Fonction pour réinstaller le Hub sur les appareils sélectionnés
-       private func reinstallHubOnSelectedDevices() {
-           guard !selectedDevices.isEmpty else { return }
-           
-           let apiManager = APIManager()
-           for udid in selectedDevices {
-               apiManager.installHub(on: udid)
-           }
-       }
-   }
-
-
-   struct LoginPopupView: View {
-       @Binding var login: String
-       @Binding var password: String
-       @Binding var apiKey: String
-       @Binding var isAuthenticated: Bool
-       
-       var body: some View {
-           VStack {
-               Text("S'authentifier")
-                   .font(.headline)
-                   .padding()
-
-               TextField("Login", text: $login)
-                   .padding()
-                   .textFieldStyle(RoundedBorderTextFieldStyle())
-
-               SecureField("Password", text: $password)
-                   .padding()
-                   .textFieldStyle(RoundedBorderTextFieldStyle())
-
-               TextField("API Key", text: $apiKey)
-                   .padding()
-                   .textFieldStyle(RoundedBorderTextFieldStyle())
-
-               Button("Se connecter") {
-                   if saveCredentials() {
-                       self.isAuthenticated = true
-                   }
-               }
-               .padding()
-               .background(Color.blue)
-               .foregroundColor(.white)
-               .cornerRadius(10)
-           }
-           .padding()
-       }
-
-       // Sauvegarde des informations dans le Keychain
-       private func saveCredentials() -> Bool {
-           guard !login.isEmpty, !password.isEmpty, !apiKey.isEmpty else {
-               return false
-           }
-           
-           return KeychainHelper.shared.savePassword(username: login, password: password, accountName: "WorkspaceOneCredentials")
-       }
-   }
-
-   struct ContentView_Previews: PreviewProvider {
-       static var previews: some View {
-           ContentView()
-       }
-   }
-
-class KeychainHelper {
-
-    static let shared = KeychainHelper()
-
-    // Clé pour identifier les données dans le Keychain
-    private let service = "ch.epfl.ReinstallHub"
+    @State private var devices: [Device] = []
+    @State private var selectedDevices: Set<Device> = []
+    @State private var statusMessage: String = ""
+    @State private var isLoading: Bool = false
+    @State private var isAuthenticated = false
+    @AppStorage("isConfigured") private var isConfigured: Bool = true
     
-    // Fonction pour stocker un mot de passe dans le Keychain
-    func savePassword(username: String, password: String, accountName: String) -> Bool {
-        let loginPassword = "\(username):\(password)"
-        let passwordData = loginPassword.data(using: .utf8)!
-        
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: accountName,
-            kSecValueData as String: passwordData
-        ]
-        
-        // Effacer l'ancien mot de passe si il existe déjà
-        SecItemDelete(query as CFDictionary)
-        
-        // Ajouter ou mettre à jour le mot de passe
-        let status = SecItemAdd(query as CFDictionary, nil)
-        
-        return status == errSecSuccess
-    }
-
-    // Fonction pour récupérer un mot de passe à partir du Keychain
-    func retrievePassword(for accountName: String) -> (username: String, password: String)? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: accountName,
-            kSecReturnData as String: kCFBooleanTrue!,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        
-        if status == errSecSuccess, let data = result as? Data,
-           let loginPassword = String(data: data, encoding: .utf8)?.split(separator: ":") {
-            let username = String(loginPassword[0])
-            let password = String(loginPassword[1])
-            return (username, password)
-        } else {
-            print("Erreur lors de la récupération du mot de passe ou compte non trouvé.")
-            return nil
+    var body: some View {
+        VStack {
+            if isLoading {
+                ProgressView("Chargement en cours…")
+                    .progressViewStyle(CircularProgressViewStyle())
+            } else {
+                List(devices, id: \.id, selection: $selectedDevices) { device in
+                    Text(device.friendlyName).tag(device)
+                }
+            }
+            Text(statusMessage)
+                .foregroundColor(.red)
+                .padding()
+            
+                .toolbar {
+                    HStack {
+                        Button("Réinstaller le Hub") {
+                            reinstallHubOnSelectedDevices()
+                        }
+                        .disabled(selectedDevices.isEmpty)
+                        
+                        Button("Rafraîchir") {
+                            refreshDeviceList()
+                        }
+                        .disabled(!isAuthenticated)
+                        
+                        Button("Reset Authentification") {
+                            clearStorage()
+                            isConfigured = false // Retour à l'écran de configuration
+                        }
+                        
+                        Button("Quitter") {
+                            NSApp.terminate(nil)
+                        }
+                        
+                    }
+                }
+        }
+        .onAppear {
+            //refreshDeviceList()
+            if isAuthenticated {
+                refreshDeviceList()
+            }
+            else{
+                authenticateUser()
+            }
         }
     }
+    
+    func authenticateUser() {
+           let context = LAContext()
+           var error: NSError?
+           
+           // Vérifier si l'authentification biométrique est disponible
+           if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) {
+               // Demander l'authentification biométrique
+               context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Veuillez vous authentifier pour accéder aux appareils") { success, authenticationError in
+                   DispatchQueue.main.async {
+                       if success {
+                           isAuthenticated = true
+                           refreshDeviceList() // Authentification réussie, charger les appareils
+                       } else {
+                           statusMessage = authenticationError?.localizedDescription ?? ""
+                       }
+                   }
+               }
+           } else {
+               // Biométrie non disponible, afficher une erreur
+               statusMessage = "La biométrie n'est pas disponible sur cet appareil."
+           }
+       }
+    
+    func reinstallHubOnSelectedDevices() {
+        isLoading = true
+        statusMessage = "Réinstallation en cours…"
+        let deviceIds = selectedDevices.map { $0.id }
+        for deviceId in deviceIds {
+            reinstallHub(deviceId: deviceId) { success in
+                DispatchQueue.main.async {
+                    if success {
+                        statusMessage = "Réinstallation réussie pour l'appareil \(deviceId)"
+                    } else {
+                        statusMessage = "Erreur lors de la réinstallation pour l'appareil \(deviceId)"
+                    }
+                    isLoading = false
+                }
+            }
+        }
+    }
+    
+    private func refreshDeviceList() {
+        guard let config = getAppConfig() else { return }
+        isLoading = true
+        statusMessage = ""
+        fetchDevices(withTag: config.tagid ?? "Missing Tag ID") { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let fetchedDevices):
+                    devices = fetchedDevices
+                    
+                    if(devices.isEmpty)
+                    {
+                        statusMessage = "Aucun mac trouvé avec hub manquant"
+                    }
+                    else
+                    {
+                        statusMessage = "Appareils chargés avec succès."
+                    }
+                case .failure(let error):
+                    statusMessage = "Erreur de chargement : \(error.localizedDescription)"
+                }
+                isLoading = false
+            }
+        }
+    }
+}
 
-    // Fonction pour supprimer un mot de passe du Keychain
-    func deletePassword(for accountName: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: accountName
-        ]
+func reinstallHub(deviceId: Int, completion: @escaping (Bool) -> Void) {
+    guard let config = getAppConfig(), let credentials = getCredentials() else { return }
+    
+    let url = URL(string: "\(config.wsoUrl ?? "url missing")/api/mam/apps/internal/\(config.appId ?? "appid missing")/install")!
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue(credentials.apiKey, forHTTPHeaderField: "aw-tenant-code")
+    
+    let loginString = "\(credentials.username):\(credentials.password)"
+    let loginData = loginString.data(using: .utf8)
+    let base64LoginString = loginData?.base64EncodedString() ?? ""
+    request.setValue("Basic \(base64LoginString)", forHTTPHeaderField: "Authorization")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    
+    do {
+        let body: [String: Any] = ["DeviceId": String(deviceId)]
+        let jsonData = try JSONSerialization.data(withJSONObject: body, options: [])
         
-        let status = SecItemDelete(query as CFDictionary)
-        return status == errSecSuccess
+        if let jsonString = String(data: jsonData, encoding: .utf8) {
+              print("Contenu de jsonData: \(jsonString)")
+          }
+        
+        request.httpBody = jsonData
+        
+        print(url)
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if error != nil {
+                completion(false)
+                return
+            }
+            completion(true)
+        }
+        task.resume()
+    } catch {
+        print("Erreur de sérialisation JSON: \(error.localizedDescription)")
     }
 }
 
 @main
 struct ReinstallHubApp: App {
-    let persistenceController = PersistenceController.shared
-
+    @AppStorage("isConfigured") private var isConfigured: Bool = false
+    
     var body: some Scene {
         WindowGroup {
-            DeviceListView()
-                .environment(\.managedObjectContext, persistenceController.container.viewContext)
+            if isConfigured {
+                DeviceListView()
+            } else {
+                ConfigurationView(isConfigured: $isConfigured)
+            }
         }
     }
 }

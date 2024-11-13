@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AF3434A82CE2BC1100DB7E86 /* info.plist in Resources */ = {isa = PBXBuildFile; fileRef = AF3434A72CE2BC1100DB7E86 /* info.plist */; };
+		AFA3E9442CE36BAC007E840A /* KeychainAccess in Frameworks */ = {isa = PBXBuildFile; productRef = AFA3E9432CE36BAC007E840A /* KeychainAccess */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -15,9 +16,22 @@
 		AF52F31C2CE2A7700082FD0B /* ReinstallHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ReinstallHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AFA3E94A2CE4A7BA007E840A /* Exceptions for "ReinstallHub" folder in "ReinstallHub" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = AF52F31B2CE2A7700082FD0B /* ReinstallHub */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AF52F31E2CE2A7700082FD0B /* ReinstallHub */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AFA3E94A2CE4A7BA007E840A /* Exceptions for "ReinstallHub" folder in "ReinstallHub" target */,
+			);
 			path = ReinstallHub;
 			sourceTree = "<group>";
 		};
@@ -28,6 +42,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AFA3E9442CE36BAC007E840A /* KeychainAccess in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +86,7 @@
 			);
 			name = ReinstallHub;
 			packageProductDependencies = (
+				AFA3E9432CE36BAC007E840A /* KeychainAccess */,
 			);
 			productName = ReinstallHub;
 			productReference = AF52F31C2CE2A7700082FD0B /* ReinstallHub.app */;
@@ -100,6 +116,9 @@
 			);
 			mainGroup = AF52F3132CE2A7700082FD0B;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AFA3E9422CE36BAC007E840A /* XCLocalSwiftPackageReference "../KeychainAccess-4.2.2" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AF52F31D2CE2A7700082FD0B /* Products */;
 			projectDirPath = "";
@@ -260,6 +279,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ReinstallHub/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -274,7 +294,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ch.epfl.ReinstallHub;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -301,6 +321,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ReinstallHub/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -315,7 +336,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ch.epfl.ReinstallHub;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -350,6 +371,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AFA3E9422CE36BAC007E840A /* XCLocalSwiftPackageReference "../KeychainAccess-4.2.2" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../KeychainAccess-4.2.2";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AFA3E9432CE36BAC007E840A /* KeychainAccess */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KeychainAccess;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AF52F3142CE2A7700082FD0B /* Project object */;
 }
