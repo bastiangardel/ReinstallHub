@@ -76,6 +76,27 @@ func saveToCoreData(url: String, appId: String, tagid: String) {
     }
 }
 
+func clearStorage() {
+    // Effacer Core Data
+    let context = PersistenceController.shared.container.viewContext
+    let fetchRequest: NSFetchRequest<NSFetchRequestResult> = AppConfig.fetchRequest()
+    let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
+    
+    do {
+        try context.execute(deleteRequest)
+        try context.save()
+    } catch {
+        print("Erreur lors de la suppression des données dans Core Data: \(error)")
+    }
+    
+    // Effacer Keychain
+    do {
+        try keychain.removeAll()
+    } catch let error {
+        print("Erreur lors de la suppression des informations du Keychain: \(error)")
+    }
+}
+
 func getAppConfig() -> AppConfig? {
     let context = PersistenceController.shared.container.viewContext
     let request: NSFetchRequest<AppConfig> = AppConfig.fetchRequest()
@@ -167,152 +188,6 @@ func fetchDevices(withTag tag: String, completion: @escaping (Result<[Device], E
     task.resume()
 }
 
-func clearStorage() {
-    // Effacer Core Data
-    let context = PersistenceController.shared.container.viewContext
-    let fetchRequest: NSFetchRequest<NSFetchRequestResult> = AppConfig.fetchRequest()
-    let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
-    
-    do {
-        try context.execute(deleteRequest)
-        try context.save()
-    } catch {
-        print("Erreur lors de la suppression des données dans Core Data: \(error)")
-    }
-    
-    // Effacer Keychain
-    do {
-        try keychain.removeAll()
-    } catch let error {
-        print("Erreur lors de la suppression des informations du Keychain: \(error)")
-    }
-}
-
-struct DeviceListView: View {
-    @State private var devices: [Device] = []
-    @State private var selectedDevices: Set<Device> = []
-    @State private var statusMessage: String = ""
-    @State private var isLoading: Bool = false
-    @State private var isAuthenticated = false
-    @AppStorage("isConfigured") private var isConfigured: Bool = true
-    
-    var body: some View {
-        VStack {
-            if isLoading {
-                ProgressView("Chargement en cours…")
-                    .progressViewStyle(CircularProgressViewStyle())
-            } else {
-                List(devices, id: \.id, selection: $selectedDevices) { device in
-                    Text(device.friendlyName).tag(device)
-                }
-            }
-            Text(statusMessage)
-                .foregroundColor(.red)
-                .padding()
-            
-                .toolbar {
-                    HStack {
-                        Button("Réinstaller le Hub") {
-                            reinstallHubOnSelectedDevices()
-                        }
-                        .disabled(selectedDevices.isEmpty)
-                        
-                        Button("Rafraîchir") {
-                            refreshDeviceList()
-                        }
-                        .disabled(!isAuthenticated)
-                        
-                        Button("Reset Authentification") {
-                            clearStorage()
-                            isConfigured = false // Retour à l'écran de configuration
-                        }
-                        
-                        Button("Quitter") {
-                            NSApp.terminate(nil)
-                        }
-                        
-                    }
-                }
-        }
-        .onAppear {
-            //refreshDeviceList()
-            if isAuthenticated {
-                refreshDeviceList()
-            }
-            else{
-                authenticateUser()
-            }
-        }
-    }
-    
-    func authenticateUser() {
-           let context = LAContext()
-           var error: NSError?
-           
-           // Vérifier si l'authentification biométrique est disponible
-           if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) {
-               // Demander l'authentification biométrique
-               context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Veuillez vous authentifier pour accéder aux appareils") { success, authenticationError in
-                   DispatchQueue.main.async {
-                       if success {
-                           isAuthenticated = true
-                           refreshDeviceList() // Authentification réussie, charger les appareils
-                       } else {
-                           statusMessage = authenticationError?.localizedDescription ?? ""
-                       }
-                   }
-               }
-           } else {
-               // Biométrie non disponible, afficher une erreur
-               statusMessage = "La biométrie n'est pas disponible sur cet appareil."
-           }
-       }
-    
-    func reinstallHubOnSelectedDevices() {
-        isLoading = true
-        statusMessage = "Réinstallation en cours…"
-        let deviceIds = selectedDevices.map { $0.id }
-        for deviceId in deviceIds {
-            reinstallHub(deviceId: deviceId) { success in
-                DispatchQueue.main.async {
-                    if success {
-                        statusMessage = "Réinstallation réussie pour l'appareil \(deviceId)"
-                    } else {
-                        statusMessage = "Erreur lors de la réinstallation pour l'appareil \(deviceId)"
-                    }
-                    isLoading = false
-                }
-            }
-        }
-    }
-    
-    private func refreshDeviceList() {
-        guard let config = getAppConfig() else { return }
-        isLoading = true
-        statusMessage = ""
-        fetchDevices(withTag: config.tagid ?? "Missing Tag ID") { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let fetchedDevices):
-                    devices = fetchedDevices
-                    
-                    if(devices.isEmpty)
-                    {
-                        statusMessage = "Aucun mac trouvé avec hub manquant"
-                    }
-                    else
-                    {
-                        statusMessage = "Appareils chargés avec succès."
-                    }
-                case .failure(let error):
-                    statusMessage = "Erreur de chargement : \(error.localizedDescription)"
-                }
-                isLoading = false
-            }
-        }
-    }
-}
-
 func reinstallHub(deviceId: Int, completion: @escaping (Bool) -> Void) {
     guard let config = getAppConfig(), let credentials = getCredentials() else { return }
     
@@ -352,9 +227,159 @@ func reinstallHub(deviceId: Int, completion: @escaping (Bool) -> Void) {
     }
 }
 
+
+struct DeviceListView: View {
+    @State private var devices: [Device] = []
+    @State private var selectedDevices: Set<Device> = []
+    @State private var statusMessage: String = ""
+    @State private var isLoading: Bool = false
+    @State private var isAuthenticated = false
+    @AppStorage("isConfigured") private var isConfigured: Bool = true
+    
+    var body: some View {
+        VStack {
+            if isLoading {
+                ProgressView("Chargement en cours…")
+                    .progressViewStyle(CircularProgressViewStyle())
+            } else {
+                List(devices, id: \.id, selection: $selectedDevices) { device in
+                    Text(device.friendlyName).tag(device)
+                }
+            }
+            Text(statusMessage)
+                .foregroundColor(.red)
+                .padding()
+            
+                .toolbar {
+                    HStack {
+                        Button("Hub Reinstall") {
+                            reinstallHubOnSelectedDevices()
+                        }
+                        .disabled(selectedDevices.isEmpty)
+                        
+                        Button("Select All") {
+                            selectAllDevices()
+                        }
+                        .disabled(selectedDevices.isEmpty)
+                        
+                        Button("Reload") {
+                            refreshDeviceList()
+                        }
+                        .disabled(!isAuthenticated)
+                        
+                        
+                        Button("Authenticate") {
+                            authenticateUser()
+                        }
+                        .disabled(isAuthenticated)
+                        
+                        Button("Reset Settings") {
+                            clearStorage()
+                            isConfigured = false // Retour à l'écran de configuration
+                            isAuthenticated = false
+                        }
+                        .disabled(!isAuthenticated)
+                        
+                        Button("Close App") {
+                            NSApp.terminate(nil)
+                        }
+                        
+                    }
+                }
+        }
+        .onAppear {
+            if isAuthenticated {
+                refreshDeviceList()
+            }
+            else{
+                authenticateUser()
+            }
+        }
+    }
+    
+    func selectAllDevices() {
+        selectedDevices = Set(devices) // Ajouter tous les appareils à la sélection
+    }
+    
+    func authenticateUser() {
+           let context = LAContext()
+           var error: NSError?
+           
+           // Vérifier si l'authentification biométrique est disponible
+           if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
+               // Demander l'authentification biométrique
+               context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "que vous vous authentifiez pour accéder aux appareils") { success, authenticationError in
+                   DispatchQueue.main.async {
+                       if success {
+                           isAuthenticated = true
+                           refreshDeviceList() // Authentification réussie, charger les appareils
+                       } else {
+                           statusMessage = authenticationError?.localizedDescription ?? ""
+                       }
+                   }
+               }
+           } else {
+               // Biométrie non disponible, afficher une erreur
+               statusMessage = "La biométrie n'est pas disponible sur cet appareil."
+           }
+       }
+    
+    func reinstallHubOnSelectedDevices() {
+        isLoading = true
+        statusMessage = "Réinstallation en cours…"
+        let deviceIds = selectedDevices.map { $0.id }
+        for deviceId in deviceIds {
+            reinstallHub(deviceId: deviceId) { success in
+                DispatchQueue.main.async {
+                    if success {
+                        statusMessage = "Réinstallation réussie pour l'appareil \(deviceId)"
+                    } else {
+                        statusMessage = "Erreur lors de la réinstallation pour l'appareil \(deviceId)"
+                    }
+                    isLoading = false
+                }
+            }
+        }
+    }
+    
+    func applicationShouldTerminateAfterLastWindowClosed (_ theApplication: NSApplication) -> Bool {
+        return true
+    }
+    
+    private func refreshDeviceList() {
+        guard let config = getAppConfig() else { return }
+        isLoading = true
+        statusMessage = ""
+        fetchDevices(withTag: config.tagid ?? "Missing Tag ID") { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let fetchedDevices):
+                    devices = fetchedDevices
+                    
+                    if(devices.isEmpty)
+                    {
+                        statusMessage = "Aucun mac trouvé avec hub manquant"
+                    }
+                    else
+                    {
+                        statusMessage = "Appareils chargés avec succès."
+                    }
+                case .failure(let error):
+                    statusMessage = "Erreur de chargement : \(error.localizedDescription)"
+                }
+                isLoading = false
+            }
+        }
+    }
+}
+
+
+
 @main
 struct ReinstallHubApp: App {
     @AppStorage("isConfigured") private var isConfigured: Bool = false
+    
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
         WindowGroup {
@@ -364,5 +389,11 @@ struct ReinstallHubApp: App {
                 ConfigurationView(isConfigured: $isConfigured)
             }
         }
+    }
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return true
     }
 }
